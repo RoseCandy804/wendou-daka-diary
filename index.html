@@ -392,6 +392,30 @@
   }
   #toast.show{ opacity:1; transform:translate(-50%,0); }
 </style>
+<style>
+  /* ================= 云端版：主人后台 / 登录页补充 ================= */
+  #viewAdmin{ flex:1; display:flex; flex-direction:column; min-height:0; }
+  .adm-head{ display:flex; align-items:center; gap:10px; padding:18px 18px 8px; }
+  .adm-title{ flex:1; font-weight:800; font-size:17px; color:var(--title2); white-space:nowrap; text-align:center; }
+  .adm-body{ flex:1; overflow:auto; padding:8px 18px 28px; }
+  .adm-sum{ font-size:12px; color:var(--text3); margin:2px 4px 12px; }
+  .adm-card{ background:var(--glass3); border:1px solid var(--cardline); border-radius:18px; padding:13px 15px; margin-bottom:10px; box-shadow:0 6px 16px rgba(var(--tintR),.5); animation:itemIn .3s both; }
+  .adm-row{ display:flex; align-items:center; gap:11px; }
+  .adm-ava{ width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--g1),var(--g2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:17px; flex-shrink:0; }
+  .adm-info{ flex:1; min-width:0; }
+  .adm-name{ font-weight:800; color:var(--text); font-size:15px; }
+  .adm-meta{ font-size:11px; color:var(--text3); margin-top:2px; word-break:break-all; }
+  .adm-badges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+  .adm-badge{ font-size:11px; padding:3px 9px; border-radius:999px; background:rgba(var(--tintR),.75); color:var(--text6); font-weight:600; }
+  .adm-empty{ text-align:center; color:var(--text3); font-size:13px; padding:38px 10px; line-height:1.9; }
+  .owner-link{ margin-top:14px; font-size:12px; color:var(--text4); text-decoration:underline dotted; text-underline-offset:3px; cursor:pointer; }
+  #ownerBox{ margin-top:12px; }
+  #ownerBox .field{ display:flex; gap:8px; margin-bottom:0; }
+  #ownerBox .field input{ width:auto; flex:1; text-align:left; }
+  #ownerBox .mini-btn{ flex-shrink:0; padding:0 16px; font-size:14px; font-weight:700; color:var(--txtOn); border:none; border-radius:16px; cursor:pointer; background:linear-gradient(135deg,var(--g1),var(--g2)); box-shadow:0 6px 14px rgba(var(--btnRgb),.3); }
+  #loginSync{ min-height:16px; font-size:11px; color:var(--text3); margin-top:10px; }
+</style>
+<script src="https://static.cloudbase.net/cloudbase-js-sdk/2.17.3/cloudbase.full.js"></script>
 </head>
 <body>
   <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
@@ -409,7 +433,15 @@
         </div>
         <p id="loginError"></p>
         <button class="btn-primary" id="btnLogin">开始记录 ✨</button>
-        <div class="step-note">所有数据自动保存在本机浏览器中<br>关闭页面后再打开也不会丢失</div>
+        <div class="step-note">输入名字即注册 / 登录<br>打卡数据已云同步 · 主人后台可见 ✨</div>
+        <p id="loginSync"></p>
+        <div class="owner-link" id="ownerLink">🔑 主人入口（查看全部成员）</div>
+        <div id="ownerBox" class="hidden">
+          <div class="field">
+            <input id="ownerPass" type="password" maxlength="20" placeholder="主人密码" autocomplete="off">
+            <button class="mini-btn" id="btnOwnerGo">进入</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -528,6 +560,19 @@
         <button class="tab" data-tab="me"><span class="ic">💗</span><span class="lb">我的</span></button>
       </nav>
     </section>
+
+    <!-- ============ 主人后台 ============ -->
+    <section id="viewAdmin" class="hidden">
+      <div class="adm-head">
+        <button class="btn-ghost" id="btnAdmBack">← 返回</button>
+        <div class="adm-title">🌸 成员后台</div>
+        <button class="btn-ghost" id="btnAdmReload">刷新</button>
+      </div>
+      <div class="adm-body">
+        <p class="adm-sum" id="admSum">读取中…</p>
+        <div id="adminList"></div>
+      </div>
+    </section>
   </div>
 
   <!-- 添加任务弹窗（两步：文字 → 周期） -->
@@ -575,6 +620,14 @@
   var calY = 0, calM = 0;      // 日历当前查看的年月
   var noteDate = '';           // 手账当前查看的日期
   var saveTimer = null;
+
+  /* ---------- 云端（CloudBase）配置 ---------- */
+  var ENV_ID = 'wendou-daka-d9gfllxss9bc0d4df';   // 云开发环境 ID
+  var COL_NAME = 'accounts';                        // 成员集合名（每人一条记录）
+  var OWNER_PASS = 'wenrou888';                     // 主人密码（改这里即可换密码）
+  var cloudApp = null, cloudDB = null, cloudOk = false;
+  var cloudBusy = false, cloudDirty = false, cloudTimer = null;
+  var modeOffline = false;                          // 云端连不上时降级为纯本机
 
   var WEEK_CN = ['日','一','二','三','四','五','六'];
   var PERIODS = [
@@ -665,6 +718,7 @@
   function saveDB(){
     try{ localStorage.setItem(DB_KEY, JSON.stringify(DB)); }
     catch(e){ toast('保存失败，请检查浏览器存储权限'); }
+    queueCloudSave();
   }
   function me(){
     if(!DB.users[user]) DB.users[user] = { tasks:[], records:{}, notes:{} };
@@ -677,6 +731,72 @@
   function toast(msg){
     var t=$('toast'); t.textContent=msg; t.classList.add('show');
     clearTimeout(t._t); t._t=setTimeout(function(){ t.classList.remove('show'); },1900);
+  }
+
+  /* ================= 云端适配层（CloudBase） ================= */
+  function cloudEnsure(){
+    if(cloudOk) return Promise.resolve(true);
+    return new Promise(function(resolve){
+      try{
+        if(!window.cloudbase){ resolve(false); return; }
+        cloudApp = cloudbase.init({ env: ENV_ID });
+        cloudDB = cloudApp.database();
+        cloudApp.auth().signInAnonymously().then(function(){
+          cloudOk = true; resolve(true);
+        }).catch(function(){
+          // 可能此前已登录过，尝试读取用户信息确认
+          return cloudApp.auth().getUserInfo().then(function(){
+            cloudOk = true; resolve(true);
+          }).catch(function(){ cloudOk = false; resolve(false); });
+        });
+      }catch(e){ resolve(false); }
+    });
+  }
+  function accCol(){ return cloudDB.collection(COL_NAME); }
+  function fetchMyDocs(){                       // 我（本浏览器/本设备）注册过的全部账号
+    return accCol().where({ _openid: '{openid}' }).limit(50).get()
+      .then(function(r){ return r.data || []; });
+  }
+  function findDocByName(name){                 // 全库查这个名字（用于查重）
+    return accCol().where({ name: name }).limit(1).get()
+      .then(function(r){ return (r.data && r.data[0]) || null; });
+  }
+  function normData(d){
+    if(!d || typeof d !== 'object') d = {};
+    if(!Array.isArray(d.tasks)) d.tasks = [];
+    if(!d.records || typeof d.records !== 'object') d.records = {};
+    if(!d.notes || typeof d.notes !== 'object') d.notes = {};
+    return d;
+  }
+  function escHtml(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+  function sdate(v){
+    if(!v) return '—';
+    var d = new Date(v);
+    if(isNaN(d.getTime())) return String(v);
+    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+  }
+  function queueCloudSave(){                    // 防抖：变更后 0.6s 推送到云端
+    if(!cloudOk || !user) return;
+    if(cloudBusy){ cloudDirty = true; return; }
+    if(cloudTimer) return;
+    cloudTimer = setTimeout(function(){ cloudTimer = null; pushCloud(); }, 600);
+  }
+  function pushCloud(){
+    if(!cloudOk || !user || cloudBusy) return;
+    cloudBusy = true;
+    accCol()
+      .where({ name: user, _openid: '{openid}' })
+      .update({ data: me(), updatedAt: new Date() })
+      .then(function(){})
+      .catch(function(){})
+      .then(function(){
+        cloudBusy = false;
+        if(cloudDirty){ cloudDirty = false; queueCloudSave(); }
+      });
   }
 
   /* ---------- 统计 ---------- */
@@ -730,7 +850,7 @@
     return n;
   }
 
-  /* ================= 登录 / 退出 ================= */
+  /* ================= 登录 / 退出（云端版） ================= */
   function enterApp(){
     $('viewLogin').classList.add('hidden');
     $('viewApp').classList.remove('hidden');
@@ -739,21 +859,73 @@
   }
   function showLogin(){
     $('viewApp').classList.add('hidden');
+    $('viewAdmin').classList.add('hidden');
     $('viewLogin').classList.remove('hidden');
     $('loginName').value=''; $('loginError').textContent='';
   }
+  function enterWithDoc(doc){
+    user = doc.name;
+    DB.users[user] = normData(doc.data);
+    try{ localStorage.setItem(CUR_KEY, user); }catch(e){}
+    saveDB();
+    enterApp();
+  }
+  var loginBusy = false;
   function doLogin(){
-    var name=$('loginName').value.trim().replace(/\s+/g,'');
-    var err=$('loginError');
+    if(loginBusy) return;
+    var name = $('loginName').value.trim().replace(/\s+/g,'');
+    var err = $('loginError');
     if(!name){ err.textContent='要先告诉我你的名字哦～'; return; }
     err.textContent='';
+    if(modeOffline){ localLogin(name); return; }
+    loginBusy = true;
+    $('btnLogin').textContent='连接中…';
+    cloudEnsure().then(function(ok){
+      if(!ok){ modeOffline = true; $('loginSync').textContent='⚠ 云端未连接，暂存本机（联网后自动恢复）'; localLogin(name); return; }
+      return fetchMyDocs().then(function(mine){
+        for(var i=0;i<mine.length;i++){
+          if(mine[i].name === name){
+            enterWithDoc(mine[i]);
+            toast('欢迎回来，'+user+' 🌸');
+            return;
+          }
+        }
+        return findDocByName(name).then(function(ex){
+          if(ex){
+            err.textContent='「'+name+'」已在别的设备注册了。请换一个名字，或联系主人处理。';
+            return;
+          }
+          return accCol().add({
+            name: name,
+            data: { tasks:[], records:{}, notes:{} },
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }).then(function(){
+            DB.users[name] = { tasks:[], records:{}, notes:{} };
+            user = name;
+            try{ localStorage.setItem(CUR_KEY, user); }catch(e){}
+            saveDB();
+            enterApp();
+            toast('欢迎你，'+name+' 🌸 从今天开始打卡吧！');
+          });
+        });
+      });
+    }).catch(function(){
+      err.textContent = '网络异常，请稍后重试';
+    }).then(function(){
+      loginBusy = false;
+      $('btnLogin').textContent='开始记录 ✨';
+    });
+  }
+  function localLogin(name){                     // 断网降级：纯本机登录
+    var err = $('loginError'); err.textContent='';
     var isNew = !DB.users[name];
     if(isNew){ DB.users[name] = { tasks:[], records:{}, notes:{} }; }
     user = name;
     try{ localStorage.setItem(CUR_KEY,user); }catch(e){}
     saveDB();
     enterApp();
-    toast(isNew ? ('欢迎你，'+user+' 🌸 从今天开始打卡吧！') : ('欢迎回来，'+user+' ✨'));
+    toast(isNew ? ('离线模式·欢迎 '+name+' 🌸') : ('离线模式·欢迎回来 '+name+' ✨'));
   }
   function doLogout(){
     user=null;
@@ -765,6 +937,81 @@
   $('loginName').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
   $('btnLogoutTop').addEventListener('click', doLogout);
   $('btnLogoutMe').addEventListener('click', doLogout);
+
+  /* ================= 主人后台 ================= */
+  $('ownerLink').addEventListener('click', function(){
+    var box = $('ownerBox');
+    box.classList.toggle('hidden');
+    if(!box.classList.contains('hidden')) $('ownerPass').focus();
+  });
+  $('btnOwnerGo').addEventListener('click', function(){
+    if($('ownerPass').value === OWNER_PASS){
+      $('ownerPass').value='';
+      $('ownerBox').classList.add('hidden');
+      showAdmin();
+    }else{
+      toast('密码不对哦');
+    }
+  });
+  function showAdmin(){
+    $('viewLogin').classList.add('hidden');
+    $('viewApp').classList.add('hidden');
+    $('viewAdmin').classList.remove('hidden');
+    adminLoad();
+  }
+  $('btnAdmBack').addEventListener('click', function(){
+    $('viewAdmin').classList.add('hidden');
+    showLogin();
+  });
+  $('btnAdmReload').addEventListener('click', adminLoad);
+  function adminLoad(){
+    var list = $('adminList');
+    $('admSum').textContent = '正在从云端读取成员…';
+    list.innerHTML = '';
+    cloudEnsure().then(function(ok){
+      if(!ok){ $('admSum').textContent='云端未连接，请检查网络后点“刷新”'; return; }
+      return accCol().limit(200).get().then(function(r){
+        var arr = (r.data || []).slice();
+        arr.sort(function(a,b){
+          return (new Date(a.createdAt)).getTime() - (new Date(b.createdAt)).getTime();
+        });
+        $('admSum').textContent = '共 ' + arr.length + ' 位成员 · 主人密码 ' + OWNER_PASS;
+        if(!arr.length){
+          list.innerHTML = '<div class="adm-empty">还没有成员加入 🍃<br>把链接分享出去，等大家注册后就会出现在这里</div>';
+          return;
+        }
+        arr.forEach(function(d){
+          var data = normData(d.data);
+          var rec = data.records || {};
+          var days = 0, items = 0, ds, keys, k;
+          for(ds in rec){
+            if(!rec.hasOwnProperty(ds)) continue;
+            keys = Object.keys(rec[ds]);
+            if(keys.length){ days++; items += keys.length; }
+          }
+          var card = document.createElement('div');
+          card.className = 'adm-card';
+          card.innerHTML =
+            '<div class="adm-row">'+
+              '<div class="adm-ava">'+escHtml(String(d.name||'?').charAt(0))+'</div>'+
+              '<div class="adm-info">'+
+                '<div class="adm-name">'+escHtml(d.name)+'</div>'+
+                '<div class="adm-meta">注册 '+sdate(d.createdAt)+' · 最近活跃 '+sdate(d.updatedAt)+'</div>'+
+              '</div>'+
+            '</div>'+
+            '<div class="adm-badges">'+
+              '<span class="adm-badge">📅 打卡 '+days+' 天</span>'+
+              '<span class="adm-badge">✅ 完成 '+items+' 件</span>'+
+              '<span class="adm-badge">🎯 任务 '+((data.tasks||[]).length)+' 个</span>'+
+              '<span class="adm-badge">📝 手账 '+Object.keys(rec).length+' 天</span>'+
+            '</div>';
+          list.appendChild(card);
+        });
+      });
+    }).catch(function(e){
+      $('admSum').textContent = '读取失败：' + (e && e.message ? e.message : '未知错误');
+    });
+  }
 
   /* ================= Tab 切换 ================= */
   var TABS = { home:'page-home', cal:'page-cal', note:'page-note', me:'page-me' };
@@ -1186,15 +1433,37 @@
   loadDB();
   var saved=null;
   try{ saved=localStorage.getItem(CUR_KEY); }catch(e){}
-  if(saved && DB.users[saved]){
-    user=saved;
-    enterApp();
-  }else{
-    if(saved) try{ localStorage.removeItem(CUR_KEY); }catch(e){}
-    var n=new Date(); calY=n.getFullYear(); calM=n.getMonth()+1; noteDate=todayStr();
-    showLogin();
-  }
+  var n=new Date(); calY=n.getFullYear(); calM=n.getMonth()+1; noteDate=todayStr();
   renderCalendar();
+
+  /* 启动：先连云端自动登录；失败则降级为纯本机模式 */
+  function boot(){
+    cloudEnsure().then(function(ok){
+      if(!ok){
+        modeOffline = true;
+        $('loginSync').textContent = '⚠ 云端未连接，数据暂存本机（联网后自动恢复）';
+        if(saved && DB.users[saved]){ user = saved; enterApp(); }
+        else{ showLogin(); }
+        return;
+      }
+      return fetchMyDocs().then(function(mine){
+        var pick = null;
+        if(saved){
+          for(var i=0;i<mine.length;i++){ if(mine[i].name === saved){ pick = mine[i]; break; } }
+        }
+        if(!pick && mine.length){ pick = mine[0]; }
+        if(pick){ enterWithDoc(pick); }
+        else{
+          if(saved) try{ localStorage.removeItem(CUR_KEY); }catch(e){}
+          showLogin();
+        }
+      });
+    }).catch(function(){
+      if(saved && DB.users[saved]){ user = saved; enterApp(); }
+      else{ showLogin(); }
+    });
+  }
+  boot();
 })();
 </script>
 <script>
